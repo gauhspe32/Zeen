@@ -1,4 +1,11 @@
 local Library={Version="0.3.0", Options={}}
+local function resolveIcon(value)
+ if value==nil or value==false or value=="" then return "" end
+ assert(type(value)=="string" or type(value)=="number","Icon must be an asset ID or asset URI")
+ local asset=tostring(value)
+ if asset:match("^%d+$") then return "rbxassetid://"..asset end
+ return asset
+end
 function Library:CreateWindow(options)
 options=options or {}
 local cleanups={}
@@ -333,7 +340,7 @@ local originals={}
 for _,label in ipairs(frame:GetChildren()) do if label:IsA("TextLabel") and label.Text==(options.Title or "Zeen Hub") then label.Position=UDim2.new(0.41116005182266235,0,0.011627906933426857,6); label.Size=UDim2.fromOffset(120,29) end end
 for _,label in ipairs(frame:GetChildren()) do if label:IsA("TextLabel") and label.Text==(options.SubTitle or options.Description or "Description") then label.Position=UDim2.new(0.40234947204589844,0,0.054953500628471375,6); label.Size=UDim2.fromOffset(133,28) end end
 local logo=Instance.new("ImageLabel")
-logo.Name="Logo"; logo.Image="rbxassetid://89606039691079"; logo.BackgroundTransparency=1
+logo.Name="Logo"; logo.Image=resolveIcon(options.Icon==nil and "89606039691079" or options.Icon); logo.BackgroundTransparency=1
 logo.Position=UDim2.fromScale(-0.005999997723847628,-0.020930232480168343); logo.Size=UDim2.fromOffset(78,79); logo.Parent=frame
 local tabIcons={}
 local tabPages={}
@@ -396,14 +403,18 @@ local function selectTab(index, instant)
   local opacity=i==index and 0 or 0.6
   local selected=i==index
   local targetSize=selected and UDim2.fromOffset(38,38) or UDim2.fromOffset(32,34)
-  local shadow=icon:FindFirstChild("SelectedShadow")
-  if originals[shadow] then originals[shadow].Transparency=selected and 0.78 or 1 end
+  local glow=icon:FindFirstChild("SelectedGlow")
+  if glow then
+   for _,layer in ipairs(glow:GetChildren()) do
+    local target=selected and layer:GetAttribute("GlowTransparency") or 1
+    originals[layer].ImageTransparency=target
+    if instant then layer.ImageTransparency=target else TS:Create(layer,TweenInfo.new(0.18),{ImageTransparency=target}):Play() end
+   end
+  end
   if instant then
    icon.Size=targetSize
-   if shadow then shadow.Transparency=selected and 0.78 or 1 end
   else
    TS:Create(icon,TweenInfo.new(0.18,Enum.EasingStyle.Sine,Enum.EasingDirection.Out),{Size=targetSize}):Play()
-   if shadow then TS:Create(shadow,TweenInfo.new(0.18),{Transparency=selected and 0.78 or 1}):Play() end
   end
   if originals and originals[icon] then originals[icon].ImageTransparency=opacity end
   if instant then icon.ImageTransparency=opacity else
@@ -419,21 +430,29 @@ local function addTab(options)
  local index=#tabIcons+1
  local icon=Instance.new("ImageButton")
  icon.Name="Tab"..index
- local asset=tostring(options.Icon or "111598016394173")
- icon.Image=string.find(asset,"rbxassetid://",1,true) and asset or "rbxassetid://"..asset
+ icon.Image=resolveIcon(options.Icon==nil and "111598016394173" or options.Icon)
  icon.BackgroundTransparency=1
  icon.AutoButtonColor=false
  icon.Active=true
  icon.AnchorPoint=Vector2.new(0.5,0.5)
  icon.Position=UDim2.fromOffset(34,24+(index-1)*48)
  icon.Size=UDim2.fromOffset(32,34)
- local selectedShadow=Instance.new("UIShadow")
- selectedShadow.Name="SelectedShadow"
- selectedShadow.Color=Color3.new(1,1,1)
- selectedShadow.BlurRadius=UDim.new(0,20)
- selectedShadow.Transparency=1
- selectedShadow.Parent=icon
- originals[selectedShadow]={Transparency=1}
+ local glow=Instance.new("Frame")
+ glow.Name="SelectedGlow"; glow.BackgroundTransparency=1; glow.Size=UDim2.fromScale(1,1); glow.ZIndex=icon.ZIndex; glow.Parent=icon
+ for ring=1,2 do
+  for step=0,7 do
+   local angle=step*math.pi/4
+   local layer=Instance.new("ImageLabel")
+   layer.Name="GlowLayer"; layer.BackgroundTransparency=1; layer.Image=icon.Image
+   layer.ImageColor3=Color3.new(1,1,1); layer.ImageTransparency=1; layer.Size=UDim2.fromScale(1,1)
+   layer.Position=UDim2.fromOffset(math.cos(angle)*ring*1.5,math.sin(angle)*ring*1.5)
+   layer.ZIndex=icon.ZIndex; layer:SetAttribute("GlowTransparency",ring==1 and 0.96 or 0.98); layer.Parent=glow
+   originals[layer]={BackgroundTransparency=1,ImageTransparency=1}
+  end
+ end
+ connect(icon:GetPropertyChangedSignal("Image"),function()
+  for _,layer in ipairs(glow:GetChildren()) do layer.Image=icon.Image end
+ end)
  icon.Parent=rail
  tabIcons[index]=icon
  tabPositions[index]=icon.Position
@@ -1159,7 +1178,7 @@ local function addTab(options)
   end
  end
  function tab:SetTitle(value) self.Title=tostring(value); self.Page.Name=self.Title; return self end
- function tab:SetIcon(value) self.Icon.Image="rbxassetid://"..tostring(value):gsub("rbxassetid://",""); return self end
+ function tab:SetIcon(value) self.Icon.Image=resolveIcon(value); return self end
  for _,column in pairs(columns) do connect(column.UIListLayout:GetPropertyChangedSignal("AbsoluteContentSize"),layoutResponsive) end
 
  function tab:Select() selectTab(index,false) end
@@ -1296,6 +1315,68 @@ if UIS.TouchEnabled then
  bar.Size=UDim2.fromOffset(28,176)
 end
 local window={Gui=gui,Frame=frame,Tabs=tabHandles,Options=windowOptions}
+local loaderVersion=0
+local loaderOverlay
+local loaderTweens={}
+local function cancelLoader()
+ loaderVersion+=1
+ for _,tween in ipairs(loaderTweens) do tween:Cancel() end
+ loaderTweens={}
+ if loaderOverlay then loaderOverlay:Destroy(); loaderOverlay=nil end
+end
+onCleanup(cancelLoader)
+local resizable=options.Resizable~=false
+local minimumSize=options.MinSize or Vector2.new(320,240)
+local resizeInput,resizeStart,resizeSize,resizePosition
+local resizeHandle=Instance.new("TextButton")
+resizeHandle.Name="ResizeHandle"; resizeHandle.Text=""; resizeHandle.BackgroundTransparency=1
+resizeHandle.AutoButtonColor=false; resizeHandle.AnchorPoint=Vector2.new(1,1)
+resizeHandle.Position=UDim2.fromScale(1,1); resizeHandle.Size=UDim2.fromOffset(UIS.TouchEnabled and 44 or 28,UIS.TouchEnabled and 44 or 28)
+resizeHandle.ZIndex=30; resizeHandle.Visible=resizable; resizeHandle.Parent=frame
+for i=1,2 do
+ local mark=Instance.new("Frame")
+ mark.Name="Grip"; mark.BorderSizePixel=0; mark.BackgroundColor3=Color3.fromRGB(105,105,105)
+ mark.BackgroundTransparency=0.4; mark.AnchorPoint=Vector2.new(.5,.5)
+ mark.Size=UDim2.fromOffset(i==1 and 10 or 5,1); mark.Rotation=-45
+ mark.Position=UDim2.new(1,-(i==1 and 10 or 7),1,-(i==1 and 10 or 7)); mark.ZIndex=31; mark.Parent=resizeHandle
+ originals[mark]={BackgroundTransparency=0.4}
+end
+local function resizeTo(value,topLeft)
+ local screenSize=viewport()
+ local maxWidth=math.max(1,screenSize.X-24)
+ local maxHeight=math.max(1,screenSize.Y-24)
+ local width=math.clamp(value.X,math.min(minimumSize.X,maxWidth),maxWidth)
+ local height=math.clamp(value.Y,math.min(minimumSize.Y,maxHeight),maxHeight)
+ preferredSize=UDim2.fromOffset(width,height)
+ if topLeft then frame.Position=UDim2.fromOffset(topLeft.X+width/2,topLeft.Y+height/2) end
+ layoutResponsive()
+end
+connect(resizeHandle.InputBegan,function(input)
+ if not resizable or state~="open" then return end
+ if input.UserInputType~=Enum.UserInputType.MouseButton1 and input.UserInputType~=Enum.UserInputType.Touch then return end
+ dragging=false; resizeInput=input; resizeStart=input.Position; resizeSize=frame.AbsoluteSize
+ local center=Vector2.new(frame.Position.X.Scale*viewport().X+frame.Position.X.Offset,frame.Position.Y.Scale*viewport().Y+frame.Position.Y.Offset)
+ resizePosition=center-resizeSize/2
+end)
+connect(UIS.InputChanged,function(input)
+ if not resizeInput then return end
+ if state~="open" or not resizable then resizeInput=nil; return end
+ if input~=resizeInput and not (resizeInput.UserInputType==Enum.UserInputType.MouseButton1 and input.UserInputType==Enum.UserInputType.MouseMovement) then return end
+ local delta=input.Position-resizeStart
+ resizeTo(resizeSize+Vector2.new(delta.X,delta.Y),resizePosition)
+end)
+connect(UIS.InputEnded,function(input) if input==resizeInput then resizeInput=nil end end)
+connect(UIS.WindowFocusReleased,function() resizeInput=nil; dragging=false end)
+function window:SetResizable(value)
+ resizable=value==true; resizeHandle.Visible=resizable
+ if not resizable then resizeInput=nil end
+ return self
+end
+function window:Resize(width,height)
+ assert(type(width)=="number" and type(height)=="number" and width==width and height==height,"Invalid window size")
+ resizeTo(Vector2.new(width,height)); return self
+end
+function window:SetIcon(value) logo.Image=resolveIcon(value); return self end
 function window:AddTab(config)
  local tab=addTab(config)
  task.defer(function() if alive and state=="open" then revealTabs() end end)
@@ -1309,11 +1390,13 @@ function window:Minimize()
 end
 function window:Open()
  if not alive then return end
+ cancelLoader()
  gui.Enabled=true
  state="open"; frame.Visible=true; bar.Visible=false; animate(true)
 end
 function window:Close()
  if not alive then return end
+ cancelLoader()
  state="closed"; dragging=false; bar.Visible=false
  animate(false,function() gui.Enabled=false end)
 end
@@ -1335,7 +1418,67 @@ frame.Visible=true
 bar.Visible=false
 scale.Scale=0.96
 for obj,properties in pairs(originals) do for p in pairs(properties) do obj[p]=1 end end
-animate(true)
+if options.Loader~=false then
+ state="loading"; frame.Visible=false
+ loaderOverlay=Instance.new("CanvasGroup")
+ loaderOverlay.Name="Loader"; loaderOverlay.AnchorPoint=Vector2.new(.5,.5)
+ loaderOverlay.Position=UDim2.new(.5,0,.5,10); loaderOverlay.GroupTransparency=1
+ loaderOverlay.BackgroundTransparency=1
+ loaderOverlay.BorderSizePixel=0; loaderOverlay.Active=true; loaderOverlay.ZIndex=100; loaderOverlay.Parent=gui
+ local loaderCorner=Instance.new("UICorner"); loaderCorner.CornerRadius=UDim.new(0,10); loaderCorner.Parent=loaderOverlay
+ local function sizeLoader()
+  if not loaderOverlay then return end
+  local available=viewport()
+  local width=math.min(tonumber(options.LoaderWidth) or 600,available.X-40,(available.Y-40)*1672/941)
+  loaderOverlay.Size=UDim2.fromOffset(math.max(1,width),math.max(1,width)*941/1672)
+ end
+ sizeLoader(); connect(gui:GetPropertyChangedSignal("AbsoluteSize"),sizeLoader)
+ local artwork=Instance.new("ImageLabel")
+ artwork.Name="Artwork"; artwork.BackgroundTransparency=1
+ artwork.Image=resolveIcon(options.LoaderImage or "78878978342422")
+ artwork.ImageTransparency=0; artwork.ScaleType=Enum.ScaleType.Fit
+ artwork.AnchorPoint=Vector2.new(.5,.5); artwork.Position=UDim2.fromScale(.5,.5)
+ artwork.Size=UDim2.fromScale(1,1); artwork.ZIndex=101; artwork.Parent=loaderOverlay
+ local ratio=Instance.new("UIAspectRatioConstraint")
+ ratio.AspectRatio=1672/941; ratio.AspectType=Enum.AspectType.FitWithinMaxSize; ratio.Parent=artwork
+ local artworkScale=Instance.new("UIScale"); artworkScale.Scale=.965; artworkScale.Parent=loaderOverlay
+ local track=Instance.new("Frame")
+ track.Name="LoadingBar"; track.AnchorPoint=Vector2.new(.5,1); track.Position=UDim2.new(.5,0,1,-16)
+ track.Size=UDim2.new(.88,0,0,4); track.BackgroundColor3=Color3.fromRGB(70,70,70)
+ track.BackgroundTransparency=.55; track.BorderSizePixel=0; track.ZIndex=102; track.ClipsDescendants=true; track.Parent=loaderOverlay
+ local trackCorner=Instance.new("UICorner"); trackCorner.CornerRadius=UDim.new(1,0); trackCorner.Parent=track
+ local fill=Instance.new("Frame")
+ fill.Name="Progress"; fill.Size=UDim2.new(0,0,1,0); fill.BackgroundColor3=Color3.fromRGB(225,225,225)
+ fill.BorderSizePixel=0; fill.ZIndex=103; fill.Parent=track
+ local fillCorner=Instance.new("UICorner"); fillCorner.CornerRadius=UDim.new(1,0); fillCorner.Parent=fill
+ local id=loaderVersion
+ local function current() return alive and id==loaderVersion and state=="loading" end
+ local function tween(object,duration,goal)
+  local animation=TS:Create(object,TweenInfo.new(duration,Enum.EasingStyle.Sine,Enum.EasingDirection.InOut),goal)
+  table.insert(loaderTweens,animation); animation:Play()
+ end
+ task.spawn(function()
+  task.spawn(function() pcall(function() local provider=game:GetService("ContentProvider") :: any; provider:PreloadAsync({artwork}) end) end)
+  local deadline=os.clock()+5
+  tween(loaderOverlay,.4,{GroupTransparency=0,Position=UDim2.fromScale(.5,.5)})
+  tween(artworkScale,.55,{Scale=1})
+  local duration=math.clamp(tonumber(options.LoaderDuration) or 1.6,.6,30)
+  tween(fill,duration+.45,{Size=UDim2.new(.88,0,1,0)})
+  task.wait(duration+.45)
+  while current() and not artwork.IsLoaded and os.clock()<deadline do task.wait(.05) end
+  if not current() then return end
+  tween(fill,.25,{Size=UDim2.new(1,0,1,0)})
+  task.wait(.4)
+  if not current() then return end
+  tween(loaderOverlay,.35,{GroupTransparency=1,Position=UDim2.new(.5,0,.5,-6)})
+  tween(artworkScale,.35,{Scale=.985})
+  task.wait(.35)
+  if not current() then return end
+  cancelLoader(); state="open"; frame.Visible=true; animate(true)
+ end)
+else
+ animate(true)
+end
 return window
 end
 return Library
