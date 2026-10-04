@@ -1481,4 +1481,59 @@ else
 end
 return window
 end
+Library.Appearance={Title="Zeen Hub",Icon="89606039691079"}
+Library.Links={Discord="https://discord.gg/uy5j2YXTgm",GetKey=""}
+Library.Storage={FileName="Zeen_key",Save=true,AutoLoad=true}
+Library.Shop={Enabled=false,Title="Get Premium",Subtitle="Instant delivery",ButtonText="Buy",Link=""}
+function Library:LaunchJunkie(config)
+ assert(type(config)=="table" and config.Service and config.Identifier and config.Provider,"Service, Identifier and Provider are required")
+ local sdk=loadstring(game:HttpGet("https://jnkie.com/sdk/library.lua"))()
+ sdk.service=config.Service; sdk.identifier=config.Identifier; sdk.provider=config.Provider
+ local file=self.Storage.FileName
+ local window=self:CreateWindow({Title=self.Appearance.Title,SubTitle="Key System",Icon=self.Appearance.Icon,Loader=config.Loader})
+ local tab=window:AddTab({Title="Key System",Icon="6031280882"})
+ local input=tab:AddInput("ScriptKey",{Title="Key",Description="Enter your key to continue",Placeholder="Paste your key",Finished=true,Side="Left"})
+ local submit=tab:AddButton({Title="Verify Key",Description="Verify and continue",Side="Left"})
+ local getKey=tab:AddButton({Title="Get Key",Description="Copy the Discord invite",Side="Right"})
+ local accepted
+ local busy=false
+ local function available() return window.Gui.Parent~=nil and window:GetState()~="closed" end
+ local function copy(link,control)
+  if type(link)~="string" or link=="" then control:SetDescription("Link unavailable"); return end
+  if not link:match("^https?://") then link="https://"..link end
+  local ok=type(setclipboard)=="function" and pcall(setclipboard,link)
+  control:SetDescription(ok and "Link copied" or "Clipboard unavailable")
+ end
+ getKey:SetCallback(function() copy(self.Links.GetKey~="" and self.Links.GetKey or self.Links.Discord,getKey) end)
+ if self.Shop.Enabled then
+  local shop=tab:AddButton({Title=self.Shop.Title,Description=self.Shop.Subtitle,Side="Right"})
+  shop:SetCallback(function() copy(self.Shop.Link,shop) end)
+ end
+ local function verify(key)
+  if busy or accepted or not available() then return end
+  key=tostring(key or ""):match("^%s*(.-)%s*$")
+  if key=="" then submit:SetDescription("Enter a key first"); return end
+  busy=true; submit:SetEnabled(false); input:SetEnabled(false); submit:SetDescription("Checking your key")
+  local ok,result=pcall(sdk.check_key,key)
+  if not available() then busy=false; return end
+  if ok and type(result)=="table" and result.valid==true then
+   accepted=result.message=="KEYLESS" and "KEYLESS" or key
+   getgenv().SCRIPT_KEY=accepted
+   if self.Storage.Save~=false and type(writefile)=="function" then pcall(writefile,file,accepted) end
+   submit:SetDescription("Access granted")
+  else
+   busy=false; submit:SetEnabled(true); input:SetEnabled(true)
+   submit:SetDescription(ok and "Key rejected" or "Verification unavailable. Try again")
+  end
+ end
+ submit:SetCallback(function() task.spawn(verify,input:GetValue()) end)
+ if self.Storage.AutoLoad~=false and type(readfile)=="function" then
+  local ok,saved=pcall(readfile,file)
+  if ok and type(saved)=="string" and saved:match("%S") then input:SetValue(saved,true); task.spawn(verify,saved) end
+ end
+ while not accepted and available() do task.wait(.1) end
+ if not accepted then window:Destroy(); return nil end
+ window:Close(); task.wait(.25); window:Destroy()
+ return accepted
+end
 return Library
